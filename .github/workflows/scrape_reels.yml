@@ -30,64 +30,55 @@ jobs:
 
     - name: Scrape Reels & Generate JSON
       run: |
-        # Python script to run yt-dlp and format JSON cleanly
         python3 -c "
         import yt_dlp
         import json
         import os
 
         username = '${{ inputs.username }}'
-        max_videos = ${{ inputs.max_videos }}
+        max_videos = int('${{ inputs.inputs.max_videos }}' or 10)
         
-        # Target URL
         url = f'https://www.instagram.com/{username}/reels/'
-        
         print(f'Starting scrape for user: {username}...')
 
         ydl_opts = {
             'quiet': True,
             'ignoreerrors': True,
             'dump_single_json': True,
-            'extract_flat': True, # Fast extraction (metadata only first)
-            'playlistend': int(max_videos),
-            'sleep_interval': 2, # Anti-blocking delay
+            'extract_flat': True,
+            'playlistend': max_videos,
+            'sleep_interval': 2,
         }
 
         results = []
-
-        # First Pass: Get the list of Reels URLs
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             try:
                 info = ydl.extract_info(url, download=False)
-                if 'entries' in info:
-                    print(f'Found {len(info[\'entries\'])} reels. Extracting details...')
-                    
-                    # Loop through entries to get direct links
-                    for entry in info['entries']:
+                # Yahan humne quotes ka issue fix kar diya hai
+                entries = info.get('entries', [])
+                if entries:
+                    print(f'Found {len(entries)} reels. Extracting details...')
+                    for entry in entries:
                         if entry:
-                            # Construct structured data
                             video_data = {
                                 'id': entry.get('id'),
                                 'title': entry.get('title'),
                                 'duration': entry.get('duration'),
                                 'view_count': entry.get('view_count'),
-                                'like_count': entry.get('like_count'),
                                 'thumbnail': entry.get('thumbnail'),
-                                'web_url': entry.get('url'), # The IG Link
-                                'download_url': entry.get('url') # yt-dlp often resolves this to direct mp4 in deep scan
+                                'web_url': f'https://www.instagram.com/reels/{entry.get(\"id\")}/',
+                                'download_url': entry.get('url')
                             }
                             results.append(video_data)
             except Exception as e:
                 print(f'Error: {e}')
 
-        # Save to JSON file
         output_file = f'{username}_reels.json'
         with open(output_file, 'w', encoding='utf-8') as f:
             json.dump(results, f, indent=4)
-        
-        print(f'Successfully saved {len(results)} reels to {output_file}')
+        print(f'Successfully saved data to {output_file}')
         "
-
+        
     - name: Upload JSON Artifact
       uses: actions/upload-artifact@v4
       with:
