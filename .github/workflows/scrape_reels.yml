@@ -1,18 +1,18 @@
-name: Instagram Reels Scraper (JSON)
+name: Instagram Scraper (Instaloader)
 
 on:
   workflow_dispatch:
     inputs:
       username:
-        description: 'Instagram Username (without @)'
+        description: 'Instagram Username'
         required: true
-      max_videos:
-        description: 'How many reels to scrape? (Default: 10)'
+      max_count:
+        description: 'Max Videos to check'
         required: false
-        default: '10'
+        default: '50'
 
 jobs:
-  scrape-reels:
+  scrape-profile:
     runs-on: ubuntu-latest
 
     steps:
@@ -22,65 +22,110 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
-        python-version: '3.9'
+        python-version: '3.10'
 
-    - name: Install Dependencies
+    - name: Install Instaloader
       run: |
-        pip install yt-dlp
+        pip install instaloader
 
-    - name: Scrape Reels & Generate JSON
+    - name: Run Scraper Script
       run: |
         python3 -c "
-        import yt_dlp
+        import instaloader
         import json
         import os
+        import sys
 
-        username = '${{ inputs.username }}'
-        max_videos = int('${{ inputs.inputs.max_videos }}' or 10)
-        
-        url = f'https://www.instagram.com/{username}/reels/'
-        print(f'Starting scrape for user: {username}...')
+        # Inputs from GitHub Actions
+        USERNAME = '${{ inputs.username }}'
+        MAX_COUNT = int('${{ inputs.max_count }}')
 
-        ydl_opts = {
-            'quiet': True,
-            'ignoreerrors': True,
-            'dump_single_json': True,
-            'extract_flat': True,
-            'playlistend': max_videos,
-            'sleep_interval': 2,
-        }
+        def scrape_user_data(username, max_count):
+            print(f'--- Starting Scrape for {username} ---')
+            
+            # Initialize Instaloader
+            # Note: GitHub IPs par login issues aa sakte hain, isliye hum aggressive settings off kar rahe hain
+            L = instaloader.Instaloader(
+                download_pictures=False,
+                download_videos=False, 
+                download_video_thumbnails=False,
+                download_geotags=False,
+                download_comments=False,
+                save_metadata=False,
+                compress_json=False
+            )
 
-        results = []
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             try:
-                info = ydl.extract_info(url, download=False)
-                # Yahan humne quotes ka issue fix kar diya hai
-                entries = info.get('entries', [])
-                if entries:
-                    print(f'Found {len(entries)} reels. Extracting details...')
-                    for entry in entries:
-                        if entry:
-                            video_data = {
-                                'id': entry.get('id'),
-                                'title': entry.get('title'),
-                                'duration': entry.get('duration'),
-                                'view_count': entry.get('view_count'),
-                                'thumbnail': entry.get('thumbnail'),
-                                'web_url': f'https://www.instagram.com/reels/{entry.get(\"id\")}/',
-                                'download_url': entry.get('url')
-                            }
-                            results.append(video_data)
+                profile = instaloader.Profile.from_username(L.context, username)
+            except instaloader.ConnectionException as e:
+                print(f'Connection Error (IP Blocked?): {e}')
+                return None
+            except instaloader.ProfileNotExistsException:
+                print('Profile not found!')
+                return None
             except Exception as e:
                 print(f'Error: {e}')
+                return None
 
-        output_file = f'{username}_reels.json'
-        with open(output_file, 'w', encoding='utf-8') as f:
-            json.dump(results, f, indent=4)
-        print(f'Successfully saved data to {output_file}')
+            # JSON Structure setup
+            data = {
+                'username': profile.username,
+                'full_name': profile.full_name,
+                'biography': profile.biography,
+                'profile_pic_url': profile.profile_pic_url,
+                'followers': profile.followers,
+                'videos': []
+            }
+
+            count = 0
+            print(f'Fetching posts for {username}...')
+            
+            try:
+                posts = profile.get_posts()
+                for post in posts:
+                    if count >= max_count:
+                        break
+                    
+                    # Sirf Videos/Reels chahiye
+                    if post.is_video:
+                        print(f'Found Video: {post.shortcode}')
+                        
+                        video_info = {
+                            'shortcode': post.shortcode,
+                            'caption': post.caption if post.caption else '',
+                            'upload_date': str(post.date_local),
+                            'video_url': post.video_url, # Direct CDN Download Link
+                            'thumbnail_url': post.url,   # High Quality Cover
+                            'likes': post.likes,
+                            'comments': post.comments,
+                            'view_count': post.video_view_count,
+                            'duration': post.video_duration
+                        }
+                        
+                        data['videos'].append(video_info)
+                        count += 1
+                        
+            except Exception as e:
+                print(f'Loop Error: {e}')
+
+            return data
+
+        # Execution
+        result = scrape_user_data(USERNAME, MAX_COUNT)
+
+        if result:
+            filename = f'{USERNAME}_data.json'
+            with open(filename, 'w', encoding='utf-8') as f:
+                json.dump(result, f, indent=4, default=str)
+            print(f'Success! Saved {len(result[\"videos\"])} videos to {filename}')
+        else:
+            print('Failed to scrape data.')
+            sys.exit(1) # Mark action as failed
         "
-        
+
     - name: Upload JSON Artifact
+      if: success()
       uses: actions/upload-artifact@v4
       with:
-        name: reels-data
+        name: instagram-json
         path: "*.json"
